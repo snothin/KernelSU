@@ -1,6 +1,7 @@
 #include <linux/completion.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
+#include <linux/jump_label.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
@@ -52,8 +53,10 @@ static inc_rlimit_ucounts_t inc_rlimit_ucounts_fn;
 static dec_rlimit_ucounts_t dec_rlimit_ucounts_fn;
 #endif
 
-/* false = kernel without the KDP creds suite: plain cred paths are used */
-static bool kdp_ready;
+/* Off = kernel without the KDP creds suite: plain cred paths are used.
+ * ksu_samsung_kdp_init() flips it on once every required symbol resolved;
+ * the inline gates in ksu_samsung_kdp.h are the single source of truth. */
+DEFINE_STATIC_KEY_FALSE(ksu_samsung_kdp_key);
 
 static void __nocfi samsung_kdp_commit_worker(struct work_struct *work)
 {
@@ -64,11 +67,6 @@ static void __nocfi samsung_kdp_commit_worker(struct work_struct *work)
     const struct cred *target_real_cred;
     struct cred *ro_cred;
     bool user_changed;
-
-    if (!uid_eq(current_euid(), GLOBAL_ROOT_UID)) {
-        commit_work->result = -EPERM;
-        goto out;
-    }
 
     target_cred = rcu_access_pointer(target->cred);
     target_real_cred = rcu_access_pointer(target->real_cred);
@@ -117,15 +115,12 @@ out:
 }
 #endif /* CONFIG_KSU_SAMSUNG_KDP */
 
+/* Reached only via ksu_put_cred(): the key gate guarantees that every KDP
+ * helper below was resolved before init turned it on. */
 void __nocfi ksu_samsung_kdp_put_cred(const struct cred *cred)
 {
 #ifdef CONFIG_KSU_SAMSUNG_KDP
     struct cred *mutable_cred = (struct cred *)cred;
-
-    if (!kdp_ready) {
-        put_cred(cred);
-        return;
-    }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
     if (mutable_cred && kdp_usecount_sub_and_test_fn(1, mutable_cred))
@@ -171,7 +166,7 @@ int ksu_samsung_kdp_init(void)
     }
 #endif
 
-    kdp_ready = true;
+    static_branch_enable(&ksu_samsung_kdp_key);
     pr_info("Samsung KDP task-scoped credential and native PGD path enabled\n");
 #endif
     return 0;
@@ -181,6 +176,8 @@ void ksu_samsung_kdp_exit(void)
 {
 }
 
+/* Reached only via ksu_commit_creds(): the key gate guarantees that the KDP
+ * helpers were resolved before init turned it on. */
 int ksu_samsung_kdp_commit_creds(struct cred *cred)
 {
 #ifdef CONFIG_KSU_SAMSUNG_KDP
@@ -189,9 +186,6 @@ int ksu_samsung_kdp_commit_creds(struct cred *cred)
 
     if (!cred)
         return -EINVAL;
-
-    if (!kdp_ready)
-        return commit_creds(cred);
 
     INIT_WORK(&commit_work.work, samsung_kdp_commit_worker);
     init_completion(&commit_work.completion);

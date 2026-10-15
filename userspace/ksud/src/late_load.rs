@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use log::{info, warn};
 use prop_rs_android::sys_prop;
 use rustix::cstr;
-use std::time::Instant;
+use std::{process::Command, time::Instant};
 
 use crate::module::{ScriptWait, handle_updated_modules, prune_modules};
 use crate::{assets, defs, init_event, metamodule, restorecon, utils};
@@ -47,7 +47,7 @@ fn clone_pid_environ(pid: u32) {
 }
 
 pub fn run(
-    _package_name: &String,
+    package_name: &String,
     kmi: Option<String>,
     stage_from: &str,
     allow_shell: bool,
@@ -218,11 +218,12 @@ pub fn run(
     }
 
     // 7. Initialize features
+    crate::feature::init_forced_features();
     if let Err(e) = crate::feature::init_features() {
         warn!("init features failed: {e}");
     }
 
-    // 8. Execute late-load stage scripts (blocking)
+    // 8. Execute late-load stage scripts with a shared boot deadline
     //
     // Module stage scripts assume the environment a boot gives them: their
     // module mounts already established, and no framework running yet. A
@@ -242,7 +243,6 @@ pub fn run(
         warn!("late-load: skipping module stage scripts (set KSU_LATE_LOAD_MODULES=1 to run them)");
     }
 
-    // Both blocking stages share one boot deadline.
     let wait = ScriptWait::Until(Instant::now() + defs::BOOT_STAGE_TIMEOUT);
     if run_module_scripts {
         init_event::run_stage("late-load", wait);
@@ -279,6 +279,19 @@ pub fn run(
     if run_module_scripts {
         init_event::run_stage("boot-completed", ScriptWait::NoWait);
     }
+
+    // 14. Restart Manager so it gets a fresh ksu fd from the newly loaded kernel module
+    info!("Restarting KernelSU Manager {package_name}...");
+    let _ = Command::new("am")
+        .args(["force-stop", package_name])
+        .status();
+    let _ = Command::new("am")
+        .args([
+            "start",
+            "-n",
+            &format!("{package_name}/me.weishu.kernelsu.ui.MainActivity"),
+        ])
+        .status();
 
     Ok(())
 }

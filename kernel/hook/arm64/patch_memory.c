@@ -188,7 +188,7 @@ static int ksu_patch_text_cb(void *arg)
 
 int ksu_patch_text(void *dst, void *src, size_t len, int flags)
 {
-#ifdef CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT
+#ifdef CONFIG_KSU_RKP_NO_PATCH_TEXT
     pr_warn("patch_text disabled for this Samsung target: dst=0x%lx len=%zu flags=0x%x\n", (unsigned long)dst, len,
             flags);
     return -EOPNOTSUPP;

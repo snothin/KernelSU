@@ -10,8 +10,7 @@
 // 3: scoped su-session driver fd
 // 4: add KSU_GET_INFO_FLAG_BUNDLED
 // 5: add EVENT_SERVICES with a start/skip result
-// TEMP (samsung): pinned to 2 to pair with the official v3.3.0 Manager (uapi 2).
-static const __u32 KERNEL_SU_UAPI_VERSION = 2;
+static const __u32 KERNEL_SU_UAPI_VERSION = 5;
 
 /* Magic numbers for reboot hook to install fd */
 static const __u32 KSU_INSTALL_MAGIC1 = 0xDEADBEEF;
@@ -112,8 +111,12 @@ struct ksu_set_app_profile_cmd {
 struct ksu_get_feature_cmd {
     __u32 feature_id; /* Input: feature ID (enum ksu_feature_id) */
     __u64 value; /* Output: feature value/state */
-    __u8 supported; /* Output: true if feature is supported, false otherwise */
+    __u8 supported; /* Output: KSU_FEATURE_FLAG_* bits, 0 if feature is not supported */
 };
+
+#define KSU_FEATURE_FLAG_SUPPORTED (1 << 0)
+/* Value is forced by boot config (force_feature param), SET_FEATURE is refused */
+#define KSU_FEATURE_FLAG_FORCED (1 << 1)
 
 struct ksu_set_feature_cmd {
     __u32 feature_id; /* Input: feature ID (enum ksu_feature_id) */

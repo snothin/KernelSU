@@ -218,10 +218,10 @@ pub fn soft_reboot() -> Result<()> {
     // run again.
     crate::module::kill_leftover_daemons();
 
-    info!("post-fs-data");
     // The framework is already down: a failure here must not skip `start`.
     // Left half-stopped, the device is turned into a real reboot by the
     // watchdog (or the user), and on a late-load device that loses root.
+    info!("post-fs-data");
     let post_fs = on_post_fs_data();
     if let Err(ref e) = post_fs {
         warn!("post-fs-data failed: {e:#} (continuing to start)");

@@ -1,8 +1,10 @@
 #include <linux/cred.h>
 #include <linux/errno.h>
+#include <linux/jump_label.h>
 #include <linux/kprobes.h>
 #include <linux/sched.h>
 
+#include "arch.h"
 #include "compat/samsung_defex.h"
 #include "infra/symbol_resolver.h"
 #include "klog.h"
@@ -18,6 +20,12 @@ static defex_get_task_creds_t defex_get_task_creds;
 static defex_set_task_creds_t defex_set_task_creds;
 static bool defex_enforce_hooked;
 
+/* Off = this kernel has no Samsung DEFEX (or its hooks were unavailable):
+ * the standard credential path is used and cred sync is skipped.  Flipped
+ * on in ksu_samsung_defex_init() once helpers resolved and the kprobe
+ * registered. */
+static DEFINE_STATIC_KEY_FALSE(ksu_samsung_defex_key);
+
 /* The module loader (ksud) is DEFEX-visible before it enters the KSU domain.
  * Any root task stays exempt as well: zygisk module loading runs as root
  * outside the KSU domain (polygraphene 91030640, credit @diabl0w). */
@@ -25,11 +33,11 @@ static struct task_struct *ksu_trusted_task;
 
 static int ksu_samsung_defex_pre_handler(struct kprobe *probe, struct pt_regs *regs)
 {
-    struct task_struct *task = (struct task_struct *)regs->regs[0];
+    struct task_struct *task = (struct task_struct *)PT_REGS_PARM1(regs);
 
     (void)probe;
     if (task == ksu_trusted_task || (task == current && current_uid().val == 0))
-        regs->regs[0] = 0;
+        PT_REGS_PARM1(regs) = 0;
 
     return 0;
 }
@@ -50,17 +58,17 @@ int ksu_samsung_defex_init(void)
     defex_get_task_creds = (defex_get_task_creds_t)ksu_resolve_symbol_for_functable_hook("get_task_creds");
     defex_set_task_creds = (defex_set_task_creds_t)ksu_resolve_symbol_for_functable_hook("set_task_creds");
     if (!defex_get_task_creds || !defex_set_task_creds) {
-        pr_warn("Samsung DEFEX credential functions unavailable - cred sync disabled\n");
-        defex_get_task_creds = NULL;
-        defex_set_task_creds = NULL;
+        pr_info("Samsung DEFEX not present, using standard credential path\n");
+        return 0;
     }
 
     ret = register_kprobe(&defex_enforce_kprobe);
     if (ret) {
-        pr_err("Samsung DEFEX enforce hook unavailable: %d\n", ret);
-        return ret;
+        pr_warn("Samsung DEFEX enforce hook unavailable: %d - DEFEX support disabled\n", ret);
+        return 0;
     }
     defex_enforce_hooked = true;
+    static_branch_enable(&ksu_samsung_defex_key);
 
     pr_info("Samsung DEFEX credential synchronization and KSU-task bypass enabled\n");
 #endif
@@ -88,7 +96,7 @@ void ksu_samsung_defex_sync_current(void)
     unsigned short cred_flags;
     int ret;
 
-    if (!defex_get_task_creds || !defex_set_task_creds)
+    if (!static_branch_unlikely(&ksu_samsung_defex_key))
         return;
 
     defex_get_task_creds(current, &stored_uid, &stored_fsuid, &stored_egid, &cred_flags);

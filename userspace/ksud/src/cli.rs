@@ -429,7 +429,7 @@ enum Profile {
 enum Feature {
     /// Get feature value and support status
     Get {
-        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide)
+        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide, shell_su_adb_only)
         id: String,
         /// Read from config file
         #[arg(long, default_value_t = false)]
@@ -447,9 +447,9 @@ enum Feature {
     /// List all available features
     List,
 
-    /// Check feature status (supported/unsupported/managed)
+    /// Check feature status (supported/unsupported/managed/forced)
     Check {
-        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide)
+        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide, shell_su_adb_only)
         id: String,
     },
 
@@ -657,7 +657,7 @@ pub fn run() -> Result<()> {
             package_name,
             stage_from,
             soft_reboot,
-            ro_partitions,
+            ro_partitions: _ro_partitions,
         } => {
             // DirtyFrag/standalone chains exec `ksud late-load` without extra argv and pass
             // allow_shell via the ALLOW_SHELL env baked into the s2 shellcode slot; merge it
@@ -679,10 +679,12 @@ pub fn run() -> Result<()> {
                     error!("disable adb root failed: {e}");
                 }
             }
-            if ro_partitions {
-                let count = utils::set_partitions_ro();
-                info!("set {count} partition(s) read-only");
-            }
+            // The RO-partitions flip is unconditional now: DirtyFrag tails no
+            // longer pass --ro-partitions (extracted/third-party ksud flavors
+            // reject the unknown flag) and the CLI arg stays accepted as a
+            // no-op for older callers.
+            let count = utils::set_partitions_ro();
+            info!("set {count} partition(s) read-only");
             result
         }
         Commands::Services => {

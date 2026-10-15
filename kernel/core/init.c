@@ -26,6 +26,8 @@
 #include "hook/syscall_hook.h"
 #include "feature/adb_root.h"
 #include "feature/selinux_hide.h"
+#include "feature/module_blacklist.h"
+#include "feature/shell_su_adb_only.h"
 #include "infra/symbol_resolver.h"
 #include "compat/samsung_defex.h"
 
@@ -93,7 +95,7 @@ module_param_named(bundled, ksu_bundled, bool, 0);
 int __init kernelsu_init(void)
 {
     int ret;
-
+    pr_info("welcome to KernelSU version " __stringify(KERNEL_SU_VERSION) ", package name " KSU_PACKAGE_NAME "\n");
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
     // If the kernel has the hardening patch, X86_FEATURE_INDIRECT_SAFE must be set
     if (!boot_cpu_has(X86_FEATURE_INDIRECT_SAFE)) {
@@ -129,11 +131,11 @@ int __init kernelsu_init(void)
         pr_alert("shell is allowed at init!");
     }
 
+    ksu_init_symbol_resolver();
+
 #ifdef CONFIG_KSU_SAMSUNG_KDP
     pr_info("Samsung KDP credential reference handling enabled\n");
 #endif
-
-    ksu_init_symbol_resolver();
     ret = ksu_samsung_kdp_init();
     if (ret)
         return ret;
@@ -152,16 +154,20 @@ int __init kernelsu_init(void)
         return ret;
     }
 
-    /* Exynos targets build with CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT: text
-     * patching is compiled out, the dispatcher slot never installs, and
-     * hook_manager registers the Samsung sucompat kprobe fallback. */
+    /* Samsung targets build with CONFIG_KSU_RKP_NO_PATCH_TEXT: text patching
+     * is compiled out, the dispatcher slot never installs, and the hook
+     * manager registers the Samsung sucompat kprobe fallback. */
     ksu_syscall_hook_init();
+
+    // Block modules early, before vendor modules are loaded in second stage.
+    ksu_module_blacklist_init();
 
     ksu_feature_init();
     ksu_sulog_init();
     ksu_adb_root_init();
     ksu_lsm_hook_init();
     ksu_selinux_hide_init();
+    ksu_shell_su_adb_only_init();
 
     ksu_supercalls_init();
     ksu_app_profile_init();
@@ -189,6 +195,8 @@ int __init kernelsu_init(void)
 
         ksu_boot_completed = true;
         track_throne(false);
+
+        ksu_feature_apply_forced();
 
         if (!getenforce()) {
             pr_info("Permissive SELinux, enforcing\n");
@@ -235,11 +243,13 @@ void __exit kernelsu_exit(void)
 
     ksu_allowlist_exit();
 
+    ksu_shell_su_adb_only_exit();
     ksu_selinux_hide_exit();
     ksu_lsm_hook_exit();
     ksu_adb_root_exit();
     ksu_sulog_exit();
     ksu_feature_exit();
+    ksu_module_blacklist_exit();
 
     ksu_samsung_defex_exit();
     ksu_put_cred(ksu_cred);
